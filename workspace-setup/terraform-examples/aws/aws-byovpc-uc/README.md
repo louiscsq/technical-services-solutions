@@ -10,7 +10,7 @@ This Terraform example deploys a Databricks workspace on AWS using the "Bring Yo
 
 ## Requirements
 
-- Terraform is installed on your local machine (version ~> 1.3): [link](https://developer.hashicorp.com/terraform/tutorials/aws-get-started/install-cli#install-terraform)
+- Terraform is installed on your local machine (version ~> 1.4): [link](https://developer.hashicorp.com/terraform/tutorials/aws-get-started/install-cli#install-terraform)
 - AWS CLI is installed on your local machine: [Mac](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) or [Windows](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
 - AWS CLI configured with appropriate credentials
 - Databricks account created (E2 account)
@@ -129,6 +129,18 @@ To avoid this, the template defaults to `uc_file_events_mode = "provided"` (only
 - **S3 bucket notification** -- sends `s3:ObjectCreated:*`, `s3:ObjectRemoved:*`, and `s3:LifecycleExpiration:*` events from the catalog bucket to the queue, as required by the [Databricks provided-queue docs](https://docs.databricks.com/aws/en/connect/unity-catalog/cloud-storage/manage-external-locations#using-a-provided-queue-for-s3).
 - **IAM inline policy** on the UC storage-credential role -- grants `sqs:ReceiveMessage`, `DeleteMessage`, `PurgeQueue`, `GetQueueAttributes`, `GetQueueUrl`, `ChangeMessageVisibility`, and `SendMessage` on the queue. The stock Databricks UC policy only covers `csms-*` queue names.
 - **External location** -- `enable_file_events = true` with `file_event_queue { provided_sqs { queue_url = ... } }`.
+
+When S3 writes the bucket notification configuration, it publishes an `s3:TestEvent` message whose body does not contain the `Records[]` shape of normal S3 event notifications. Databricks reads the queue while validating the external location and cannot parse that test message. Immediately before Databricks creates or updates the external location, Terraform therefore purges the queue and waits 60 seconds for SQS purge semantics to settle.
+
+This purge step runs only when the queue or notification configuration is (re)created or changed, before Databricks starts consuming it. It discards **all** messages queued at that moment. The machine running Terraform must have the AWS CLI on `PATH`, and its AWS identity must have `sqs:PurgeQueue` permission on the file events queue.
+
+If an apply has already failed during external-location validation because of the test event, recover manually:
+
+```sh
+aws sqs purge-queue --region <region> --queue-url <url>
+```
+
+Wait 60 seconds, then run `terraform apply` again.
 
 Set `uc_file_events_mode = "disabled"` to turn file events off entirely. No SQS, notification, or IAM resources are created, and the external location is created with `enable_file_events = false`.
 

@@ -20,6 +20,7 @@ locals {
   # Databricks auto-create untagged csms-* SNS/SQS resources (which tag-enforcing SCPs deny).
   uc_file_events_provided = var.new_catalog && var.uc_file_events_mode == "provided"
   uc_file_events_tags     = merge(var.tags, var.uc_file_events_tags)
+  uc_file_events_events   = ["s3:ObjectCreated:*", "s3:ObjectRemoved:*", "s3:LifecycleExpiration:*"]
 }
 
 resource "random_string" "catalog_bucket_suffix" {
@@ -148,7 +149,7 @@ resource "aws_s3_bucket_notification" "uc_file_events" {
 
   queue {
     queue_arn = aws_sqs_queue.uc_file_events[0].arn
-    events    = ["s3:ObjectCreated:*", "s3:ObjectRemoved:*", "s3:LifecycleExpiration:*"]
+    events    = local.uc_file_events_events
   }
 
   depends_on = [aws_sqs_queue_policy.uc_file_events]
@@ -181,6 +182,46 @@ resource "aws_iam_role_policy" "uc_file_events" {
   })
 }
 
+# Writing an S3 bucket notification sends an s3:TestEvent to the queue. Databricks
+# expects Records[] messages during provided-queue validation, so remove that test
+# message before creating or updating the external location.
+resource "terraform_data" "purge_uc_file_events_test_event" {
+  count = local.uc_file_events_provided ? 1 : 0
+
+  triggers_replace = {
+    queue_url = aws_sqs_queue.uc_file_events[0].url
+    notification_config = sha256(jsonencode({
+      queue_arn = aws_sqs_queue.uc_file_events[0].arn
+      bucket    = aws_s3_bucket.unity_catalog_bucket[0].id
+      events    = local.uc_file_events_events
+    }))
+  }
+
+  lifecycle {
+    replace_triggered_by = [
+      aws_sqs_queue.uc_file_events[0],
+      aws_s3_bucket_notification.uc_file_events[0],
+    ]
+  }
+
+  provisioner "local-exec" {
+    command = "aws sqs purge-queue --region \"$SQS_REGION\" --queue-url \"$SQS_QUEUE_URL\" && sleep 60"
+
+    environment = {
+      SQS_REGION    = var.region
+      SQS_QUEUE_URL = aws_sqs_queue.uc_file_events[0].url
+    }
+
+    interpreter = ["/bin/bash", "-c"]
+  }
+
+  depends_on = [
+    aws_s3_bucket_notification.uc_file_events,
+    aws_sqs_queue_policy.uc_file_events,
+    aws_iam_role_policy.uc_file_events,
+  ]
+}
+
 # External Location
 resource "databricks_external_location" "uc_external_location" {
   count              = var.new_catalog ? 1 : 0
@@ -205,6 +246,7 @@ resource "databricks_external_location" "uc_external_location" {
     time_sleep.wait_60_seconds,
     aws_s3_bucket_notification.uc_file_events,
     aws_iam_role_policy.uc_file_events,
+    terraform_data.purge_uc_file_events_test_event,
   ]
 }
 resource "databricks_catalog" "uc_quickstart" {
