@@ -126,8 +126,8 @@ To avoid this, the template defaults to `uc_file_events_mode = "provided"` (only
 
 - **SQS queue** `{resource_prefix}-uc-file-events` -- tagged with `merge(tags, uc_file_events_tags)` at creation time, SSE-SQS encryption, 14-day message retention.
 - **Queue policy** -- allows `s3.amazonaws.com` to `sqs:SendMessage`, restricted to the catalog bucket (`aws:SourceArn`) and your account (`aws:SourceAccount`).
-- **S3 bucket notification** -- sends `s3:ObjectCreated:*` and `s3:ObjectRemoved:*` events from the catalog bucket to the queue.
-- **IAM inline policy** on the UC storage-credential role -- grants `sqs:ReceiveMessage`, `DeleteMessage`, `PurgeQueue`, `GetQueueAttributes`, `GetQueueUrl`, and `ChangeMessageVisibility` on the queue. The stock Databricks UC policy only covers `csms-*` queue names.
+- **S3 bucket notification** -- sends `s3:ObjectCreated:*`, `s3:ObjectRemoved:*`, and `s3:LifecycleExpiration:*` events from the catalog bucket to the queue, as required by the [Databricks provided-queue docs](https://docs.databricks.com/aws/en/connect/unity-catalog/cloud-storage/manage-external-locations#using-a-provided-queue-for-s3).
+- **IAM inline policy** on the UC storage-credential role -- grants `sqs:ReceiveMessage`, `DeleteMessage`, `PurgeQueue`, `GetQueueAttributes`, `GetQueueUrl`, `ChangeMessageVisibility`, and `SendMessage` on the queue. The stock Databricks UC policy only covers `csms-*` queue names.
 - **External location** -- `enable_file_events = true` with `file_event_queue { provided_sqs { queue_url = ... } }`.
 
 Set `uc_file_events_mode = "disabled"` to turn file events off entirely. No SQS, notification, or IAM resources are created, and the external location is created with `enable_file_events = false`.
@@ -136,6 +136,20 @@ Set `uc_file_events_mode = "disabled"` to turn file events off entirely. No SQS,
 > `aws_s3_bucket_notification` manages the bucket's **entire** notification configuration. Any notifications added to the catalog bucket outside this Terraform configuration will be removed on the next apply. Add extra notifications to the same resource instead.
 
 The SCP may also require tags on other resources this template creates (for example IAM roles, VPC resources, or buckets). `tags` is applied to the cross-account role, both S3 buckets, and the file events queue; review the remaining resources against your SCP.
+
+> [!IMPORTANT]
+> **Upgrading existing deployments.** If you already deployed this template with `new_catalog = true`, the default `uc_file_events_mode = "provided"` changes the next `terraform apply`:
+>
+> - It creates the `{resource_prefix}-uc-file-events` SQS queue and queue policy.
+> - It **replaces the catalog bucket's entire S3 notification configuration** with the file events notification.
+> - It adds an inline IAM policy to the UC storage-credential role.
+> - It enables file events on the existing external location (an in-place update, not a replacement).
+>
+> Before applying:
+>
+> 1. Run `terraform init -upgrade`. The template now requires databricks provider `~> 1.117`. Older provider versions clear `provided_sqs.queue_url` when updating an external location (fixed in 1.88), and drop `enable_file_events = false` when creating one (fixed in 1.117).
+> 2. Check for existing notifications with `aws s3api get-bucket-notification-configuration --bucket <catalog-bucket>`. If the bucket has notifications you need to keep, set `uc_file_events_mode = "disabled"` until you have consolidated them.
+> 3. Clean up any leftover `csms-*` SQS queues and SNS topics from a previously failed Automatic file events setup.
 
 **Verify in the UI:** in the workspace, go to **Catalog** -> **Connect** -> **External Locations**, select the external location, then **⋮** -> **Edit** -> **Advanced options**. File events should be enabled and should use the provided SQS queue URL (`terraform output uc_file_events_queue_url`).
 
@@ -224,7 +238,7 @@ tf/
 
 | File | Purpose |
 |------|---------|
-| **versions.tf** | Terraform and provider version constraints (aws, databricks, random, time, null). |
+| **versions.tf** | Terraform and provider version constraints (aws, databricks, random, time, null). The databricks provider must be `>= 1.117` for UC file events (see [Upgrading existing deployments](#file-events-and-tag-enforcing-scps)). |
 | **providers.tf** | AWS provider (region-based) and Databricks providers (account-level via MWS endpoint, workspace-level via workspace URL). Auth via environment variables. |
 | **variables.tf** | Input variables (Databricks config, AWS config, network CIDRs, security group options, metastore options, and optional catalog/cluster toggles) with validation. |
 | **terraform.tfvars.example** | Example variable values; copy to `terraform.tfvars` and set your account ID, region, CIDRs, etc. |

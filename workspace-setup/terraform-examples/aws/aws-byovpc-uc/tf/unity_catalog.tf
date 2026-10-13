@@ -148,14 +148,14 @@ resource "aws_s3_bucket_notification" "uc_file_events" {
 
   queue {
     queue_arn = aws_sqs_queue.uc_file_events[0].arn
-    events    = ["s3:ObjectCreated:*", "s3:ObjectRemoved:*"]
+    events    = ["s3:ObjectCreated:*", "s3:ObjectRemoved:*", "s3:LifecycleExpiration:*"]
   }
 
   depends_on = [aws_sqs_queue_policy.uc_file_events]
 }
 
 # The stock databricks_aws_unity_catalog_policy only grants SQS access to csms-* queues,
-# so grant the UC role access to the Terraform-managed queue.
+# so grant the UC role access to the Terraform-managed queue (actions per the Databricks provided-queue docs).
 resource "aws_iam_role_policy" "uc_file_events" {
   count = local.uc_file_events_provided ? 1 : 0
   name  = "${var.prefix}-uc-file-events-policy"
@@ -173,6 +173,7 @@ resource "aws_iam_role_policy" "uc_file_events" {
           "sqs:GetQueueAttributes",
           "sqs:GetQueueUrl",
           "sqs:ChangeMessageVisibility",
+          "sqs:SendMessage",
         ]
         Resource = aws_sqs_queue.uc_file_events[0].arn
       }

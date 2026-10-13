@@ -89,7 +89,8 @@ new_catalog = true
 # storage_credential_name   = "my-storage-credential"
 
 # File events for the external location (only used when new_catalog = true):
-#   "provided" (default) - Terraform creates a tagged SQS queue + S3 bucket notification and points
+#   "provided" (default) - Terraform creates a tagged SQS queue + S3 bucket notification (ObjectCreated,
+#                          ObjectRemoved, LifecycleExpiration) and points
 #                          the external location at it. Use this when an SCP denies untagged resource
 #                          creation (Databricks' automatic mode creates untagged csms-* SNS/SQS resources).
 #                          WARNING: replaces any existing notification configuration on the catalog bucket.
