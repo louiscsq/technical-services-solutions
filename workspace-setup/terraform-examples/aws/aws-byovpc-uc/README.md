@@ -10,7 +10,7 @@ This Terraform example deploys a Databricks workspace on AWS using the "Bring Yo
 
 ## Requirements
 
-- Terraform is installed on your local machine (version ~> 1.4): [link](https://developer.hashicorp.com/terraform/tutorials/aws-get-started/install-cli#install-terraform)
+- Terraform is installed on your local machine (version ~> 1.3): [link](https://developer.hashicorp.com/terraform/tutorials/aws-get-started/install-cli#install-terraform)
 - AWS CLI is installed on your local machine: [Mac](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) or [Windows](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
 - AWS CLI configured with appropriate credentials
 - Databricks account created (E2 account)
@@ -130,17 +130,15 @@ To avoid this, the template defaults to `uc_file_events_mode = "provided"` (only
 - **IAM inline policy** on the UC storage-credential role -- grants `sqs:ReceiveMessage`, `DeleteMessage`, `PurgeQueue`, `GetQueueAttributes`, `GetQueueUrl`, `ChangeMessageVisibility`, and `SendMessage` on the queue. The stock Databricks UC policy only covers `csms-*` queue names.
 - **External location** -- `enable_file_events = true` with `file_event_queue { provided_sqs { queue_url = ... } }`.
 
-When S3 writes the bucket notification configuration, it publishes an `s3:TestEvent` message whose body does not contain the `Records[]` shape of normal S3 event notifications. Databricks reads the queue while validating the external location and cannot parse that test message. Immediately before Databricks creates or updates the external location, Terraform therefore purges the queue and waits 60 seconds for SQS purge semantics to settle.
+Databricks provided-queue validation cannot be satisfied deterministically during creation. If the S3 notification is configured first, S3 publishes an `s3:TestEvent` message whose body does not have the `Records[]` shape Databricks expects, so validation cannot parse it. If the notification is configured later, the queue is empty and validation reports that no file events are being received. The template therefore sets `skip_validation = true` in `provided` mode and creates the bucket notification after the external location. In `disabled` mode, `skip_validation = false`, so Databricks continues to validate IAM and S3 access normally.
 
-This purge step runs only when the queue or notification configuration is (re)created or changed, before Databricks starts consuming it. It discards **all** messages queued at that moment. The machine running Terraform must have the AWS CLI on `PATH`, and its AWS identity must have `sqs:PurgeQueue` permission on the file events queue.
+The trade-off is that Databricks does not validate the storage credential or provided queue when the external location is saved in `provided` mode. After applying, upload a test file to the catalog bucket and verify that the queue receives the S3 event and that Catalog Explorer shows file events enabled for the external location.
 
-If an apply has already failed during external-location validation because of the test event, recover manually:
+If an apply already failed with `READ_MESSAGE / Failed to parse event message`, re-run `terraform apply` with this version. You may optionally remove leftover `s3:TestEvent` messages first:
 
 ```sh
 aws sqs purge-queue --region <region> --queue-url <url>
 ```
-
-Wait 60 seconds, then run `terraform apply` again.
 
 Set `uc_file_events_mode = "disabled"` to turn file events off entirely. No SQS, notification, or IAM resources are created, and the external location is created with `enable_file_events = false`.
 
@@ -155,7 +153,7 @@ The SCP may also require tags on other resources this template creates (for exam
 > - It creates the `{resource_prefix}-uc-file-events` SQS queue and queue policy.
 > - It **replaces the catalog bucket's entire S3 notification configuration** with the file events notification.
 > - It adds an inline IAM policy to the UC storage-credential role.
-> - It enables file events on the existing external location (an in-place update, not a replacement).
+> - It adds `skip_validation = true` and enables file events on the existing external location if they have not already been applied (an in-place update, not a replacement).
 >
 > Before applying:
 >
