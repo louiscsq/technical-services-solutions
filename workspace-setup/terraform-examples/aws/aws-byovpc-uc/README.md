@@ -132,13 +132,37 @@ To avoid this, the template defaults to `uc_file_events_mode = "provided"` (only
 
 Databricks provided-queue validation cannot be satisfied deterministically during creation. If the S3 notification is configured first, S3 publishes an `s3:TestEvent` message whose body does not have the `Records[]` shape Databricks expects, so validation cannot parse it. If the notification is configured later, the queue is empty and validation reports that no file events are being received. The template therefore sets `skip_validation = true` in `provided` mode and creates the bucket notification after the external location. In `disabled` mode, `skip_validation = false`, so Databricks continues to validate IAM and S3 access normally.
 
-The trade-off is that Databricks does not validate the storage credential or provided queue when the external location is saved in `provided` mode. After applying, upload a test file to the catalog bucket and verify that the queue receives the S3 event and that Catalog Explorer shows file events enabled for the external location.
+The trade-off: `skip_validation` suppresses **all** save-time validation errors for the external location in `provided` mode, not just the queue check. Storage credential, IAM, and S3 access problems are also not reported when the location is saved. The post-apply check below is therefore **required**, not optional:
 
-If an apply already failed with `READ_MESSAGE / Failed to parse event message`, re-run `terraform apply` with this version. You may optionally remove leftover `s3:TestEvent` messages first:
+1. Upload a test file to the catalog bucket.
+2. Confirm the queue receives an S3 event (not only `s3:TestEvent`):
+   ```sh
+   aws sqs receive-message --region <region> --queue-url <url> \
+     --max-number-of-messages 10 --visibility-timeout 0 \
+     --query 'Messages[].Body' --output text | jq -r '.Event // .Records[0].eventName'
+   ```
+3. Confirm Catalog Explorer shows file events enabled for the external location (see **Verify in the UI** below).
 
-```sh
-aws sqs purge-queue --region <region> --queue-url <url>
-```
+If events are not arriving or a leftover `s3:TestEvent` is sitting in the queue, purge the queue (`aws sqs purge-queue --region <region> --queue-url <url>`).
+
+> [!NOTE]
+> With databricks provider 1.137.0, `skip_validation` only takes effect when the external location is **created**. Changing it from `false` to `true` on an existing external location is suppressed in the plan and not sent on update. Existing deployments therefore still run Databricks' queue validation when file events are first enabled. See the recovery steps below.
+
+**Recovery if an apply failed with `READ_MESSAGE ... Failed to parse event message`** (for example, an existing deployment upgraded to `provided` mode):
+
+1. Purge the S3 test events from the queue, then wait for the purge to complete (up to 60 seconds):
+   ```sh
+   aws sqs purge-queue --region <region> --queue-url <url>
+   sleep 60
+   ```
+2. Do not upload or delete files in the catalog bucket until the next step finishes.
+3. Re-run `terraform apply`. It should update the external location in place to enable file events with the provided queue.
+4. If it then fails with "no file events being received", update the external location once outside Terraform with validation skipped (check the flag spelling with `databricks external-locations update --help`), then re-run `terraform apply` to converge:
+   ```sh
+   databricks external-locations update <external-location-name> --skip-validation \
+     --json '{"enable_file_events": true, "file_event_queue": {"provided_sqs": {"queue_url": "<url>"}}}'
+   terraform apply
+   ```
 
 Set `uc_file_events_mode = "disabled"` to turn file events off entirely. No SQS, notification, or IAM resources are created, and the external location is created with `enable_file_events = false`.
 
@@ -153,7 +177,7 @@ The SCP may also require tags on other resources this template creates (for exam
 > - It creates the `{resource_prefix}-uc-file-events` SQS queue and queue policy.
 > - It **replaces the catalog bucket's entire S3 notification configuration** with the file events notification.
 > - It adds an inline IAM policy to the UC storage-credential role.
-> - It adds `skip_validation = true` and enables file events on the existing external location if they have not already been applied (an in-place update, not a replacement).
+> - It enables file events with the provided queue on the existing external location (an in-place update, not a replacement). `skip_validation` is **not** applied on this update (see the note above), so Databricks validates the queue. If the apply fails with `READ_MESSAGE ... Failed to parse event message`, follow the recovery steps above (purge the queue, wait 60 seconds, re-apply).
 >
 > Before applying:
 >
