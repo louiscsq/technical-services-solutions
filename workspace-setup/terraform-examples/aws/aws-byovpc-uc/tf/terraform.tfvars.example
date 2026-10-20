@@ -21,7 +21,8 @@ pricing_tier = "PREMIUM"
 # AWS region where resources will be deployed
 region = "us-west-2"
 
-# Optional: Additional tags for AWS resources
+# Optional: Additional tags for all Terraform-managed AWS resources (applied via provider default_tags).
+# Databricks-launched cluster EC2/EBS are tagged via cluster custom_tags, not this variable.
 # tags = {
 #   Environment = "production"
 #   Team        = "data-engineering"
@@ -44,6 +45,17 @@ intra_subnet_cidr    = ["10.0.201.0/24"]
 # Option 2: Use existing VPC (uncomment and specify IDs)
 # vpc_id     = "vpc-xxxxxxxxx"
 # subnet_ids = ["subnet-xxxxxxxxx", "subnet-yyyyyyyyy"]
+
+# Option 3: existing VPC with only private subnets -- add IGW/public subnets/NAT/endpoints
+# (VPC must have DNS support/hostnames on, no IGW attached, and the private subnets
+#  must only use the main route table; public CIDRs must be free within the VPC CIDR;
+#  no existing STS/Kinesis interface endpoints with private DNS in the VPC)
+# vpc_id                         = "vpc-xxxxxxxxx"
+# subnet_ids                     = ["subnet-xxxxxxxxx", "subnet-yyyyyyyyy"]
+# create_network_in_existing_vpc = true
+# nat_gateway_mode               = "single" # "single" or "per_az"
+# availability_zones             = ["us-west-2a", "us-west-2b"]
+# public_subnets_cidr            = ["10.0.101.0/24", "10.0.102.0/24"]
 
 # =============================================================================
 # Security Group Configuration

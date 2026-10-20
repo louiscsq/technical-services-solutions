@@ -104,11 +104,12 @@ resource "aws_s3_bucket_public_access_block" "unity_catalog" {
 }
 
 # External Location
+# Include the trailing slash added by the Databricks provider during apply.
 resource "databricks_external_location" "uc_external_location" {
   count           = var.new_catalog ? 1 : 0
   provider        = databricks.workspace
   name            = local.uc_external_location_name
-  url             = "s3://${aws_s3_bucket.unity_catalog_bucket[0].id}"
+  url             = "s3://${aws_s3_bucket.unity_catalog_bucket[0].id}/"
   credential_name = databricks_storage_credential.uc_storage_cred[0].id
   force_destroy   = true
   depends_on      = [time_sleep.wait_60_seconds]
