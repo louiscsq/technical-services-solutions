@@ -114,7 +114,7 @@ Copy `terraform.tfvars.example` to `terraform.tfvars` in the `tf/` directory and
 | `resource_prefix` | **(Optional)** Prefix for naming AWS resources (VPC, S3, IAM, etc.). Lowercase letters, numbers, hyphens, and dots only, max 40 characters. Default: `databricks-workspace`. |
 | `pricing_tier` | **(Optional)** Pricing tier for the workspace. `ENTERPRISE` or `PREMIUM`. Default: `PREMIUM`. |
 | `region` | **(Required)** AWS region code where resources will be deployed. Must be a [Databricks-supported region](https://docs.databricks.com/en/resources/supported-regions.html). |
-| `tags` | **(Optional)** Additional tags to apply to all AWS resources. Default: `{}`. |
+| `tags` | **(Optional)** Additional tags applied to all Terraform-managed AWS resources via the AWS provider `default_tags`. Clusters' EC2/EBS launched by Databricks are tagged via cluster `custom_tags`, not this variable. Default: `{}`. |
 | `vpc_id` | **(Optional)** Existing VPC ID to reuse. If empty, a new VPC is created. Default: `""`. |
 | `create_network_in_existing_vpc` | **(Optional)** With `vpc_id` and `subnet_ids`, add an IGW, public subnets, NAT gateway(s), private route tables and VPC endpoints to the existing VPC. Requires `availability_zones` and one `public_subnets_cidr` per AZ. Default: `false`. |
 | `nat_gateway_mode` | **(Optional)** NAT topology for a new VPC or `create_network_in_existing_vpc`: `single` or `per_az`. Default: `single`. Otherwise existing VPC routing is user-managed. |

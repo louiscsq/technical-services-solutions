@@ -21,7 +21,8 @@ pricing_tier = "PREMIUM"
 # AWS region where resources will be deployed
 region = "us-west-2"
 
-# Optional: Additional tags for AWS resources
+# Optional: Additional tags for all Terraform-managed AWS resources (applied via provider default_tags).
+# Databricks-launched cluster EC2/EBS are tagged via cluster custom_tags, not this variable.
 # tags = {
 #   Environment = "production"
 #   Team        = "data-engineering"

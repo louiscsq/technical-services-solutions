@@ -6,10 +6,10 @@
 provider "aws" {
   region = var.region
   default_tags {
-    tags = {
+    tags = merge(var.tags, {
       Resource = var.resource_prefix
       Project  = var.prefix
-    }
+    })
   }
 }
 
