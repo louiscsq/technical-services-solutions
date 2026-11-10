@@ -80,13 +80,13 @@ output "root_s3_bucket_arn" {
 # =============================================================================
 
 output "metastore_id" {
-  description = "ID of the Unity Catalog metastore"
-  value       = var.metastore_id == "" ? databricks_metastore.metastore[0].id : var.metastore_id
+  description = "ID of the existing Unity Catalog metastore assigned to the workspace"
+  value       = databricks_metastore_assignment.this.metastore_id
 }
 
 output "metastore_name" {
-  description = "Name of the Unity Catalog metastore"
-  value       = var.metastore_id == "" ? databricks_metastore.metastore[0].name : var.metastore_name
+  description = "Name of the existing Unity Catalog metastore assigned to the workspace"
+  value       = local.metastore_name
 }
 
 output "catalog_name" {

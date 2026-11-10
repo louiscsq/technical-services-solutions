@@ -4,19 +4,20 @@
 > **This is the recommended, canonical AWS BYOVPC template.** It supersedes the
 > legacy [`aws-byovpc`](../aws-byovpc/) example, which is now deprecated.
 
-This Terraform example deploys a Databricks workspace on AWS using the "Bring Your Own VPC" (BYOVPC) pattern with Unity Catalog. It can either provision a full networking stack (VPC, subnets, NAT Gateway, VPC endpoints, security group) or reuse an existing VPC and subnets, then creates a cross-account IAM role, an S3 root storage bucket, a Databricks workspace, and a Unity Catalog metastore assignment. Optionally, it can also create a user-defined catalog (with its own storage credential, IAM role, S3 bucket, and external location) and a UC-compatible single-node cluster.
+This Terraform example deploys a Databricks workspace on AWS using the "Bring Your Own VPC" (BYOVPC) pattern with Unity Catalog. It can either provision a full networking stack (VPC, subnets, NAT Gateway, VPC endpoints, security group) or reuse an existing VPC and subnets, then creates a cross-account IAM role, an S3 root storage bucket, a Databricks workspace, and assigns the workspace to an **existing** Unity Catalog metastore in the same region (the template never creates a metastore; see [Unity Catalog metastore](#unity-catalog-metastore)). Optionally, it can also create a user-defined catalog (with its own storage credential, IAM role, S3 bucket, and external location) and a UC-compatible single-node cluster.
 
 
 
 ## Requirements
 
-- Terraform is installed on your local machine (version ~> 1.3): [link](https://developer.hashicorp.com/terraform/tutorials/aws-get-started/install-cli#install-terraform)
+- Terraform is installed on your local machine (version ~> 1.7): [link](https://developer.hashicorp.com/terraform/tutorials/aws-get-started/install-cli#install-terraform)
 - AWS CLI is installed on your local machine: [Mac](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) or [Windows](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
 - AWS CLI configured with appropriate credentials
 - Databricks account created (E2 account)
 - Databricks account admin access
 - AWS permissions to create VPC, IAM, S3, and Security Group resources
-- When using an existing metastore (i.e. `metastore_id` is set), the identity used by Terraform (typically the Databricks **service principal** configured via `DATABRICKS_CLIENT_ID` / `DATABRICKS_CLIENT_SECRET`) must be able to create external locations on that metastore (for example `CREATE EXTERNAL LOCATION` on the metastore, or equivalent metastore-level permissions your organization grants). Metastores created by this template configure admin principals as part of this flow; attaching to an existing metastore often requires an account admin to grant this explicitly.
+- A Unity Catalog **metastore already exists in the workspace region** (one per region per account, created by an account admin). See [Unity Catalog metastore](#unity-catalog-metastore).
+- With `new_catalog = true`, the identity used by Terraform (typically the Databricks **service principal** configured via `DATABRICKS_CLIENT_ID` / `DATABRICKS_CLIENT_SECRET`) needs `CREATE STORAGE CREDENTIAL`, `CREATE EXTERNAL LOCATION` and `CREATE CATALOG` on that metastore. See [Existing metastore prerequisites](#existing-metastore-prerequisites).
 
 ## Before you begin
 
@@ -63,11 +64,39 @@ We compared the `restricted` output of provider `databricks/databricks` 1.142.0 
 
 The `customer` output also matches the docs' "default restrictions" policy (same actions). If you pin a different provider version, re-check this with `terraform console` → `data.databricks_aws_crossaccount_policy.this.json` after an apply, or in the IAM console.
 
+## Unity Catalog metastore
+
+This template **does not create or manage a metastore**. It only assigns the workspace to an existing one with `databricks_metastore_assignment`.
+
+Why: a metastore is an account-level, regional resource shared by every workspace in that region (one metastore per region per account). If it lived in the same Terraform state as a single workspace, a `terraform destroy` of that workspace could delete the metastore and the catalogs of every other workspace attached to it. Create the metastore once, outside this stack:
+
+- **Account console**: an account admin goes to **Catalog > Create metastore** and picks the workspace region. Recent accounts often already have one per region (created automatically with the first workspace).
+- Or a **separate Terraform stack** that owns only account-level resources (`databricks_metastore`).
+
+How the template picks the metastore (`metastore_id`):
+
+| `metastore_id` | Behavior |
+|----------------|----------|
+| `""` (default) | Auto-discover: lists the account's metastores (`data "databricks_metastores"`), reads each one (`data "databricks_metastore"` by `metastore_id`), and keeps the one whose `region` equals `var.region`. |
+| `"<id>"` | Uses that metastore. A precondition checks that its region equals `var.region`. |
+
+Find the ID in **Account console > Catalog** (click the metastore; the ID is on its page), or with the CLI:
+
+```bash
+databricks account metastores list
+```
+
+All checks run at **plan time** (`databricks_metastore_assignment.this` preconditions), before anything is created:
+
+- No metastore in `var.region` (auto-discover): the plan fails with `No Unity Catalog metastore found in region <region> ...`. Create one (see above), then plan again.
+- `metastore_id` is in another region: the plan fails with `Metastore <id> is not in the workspace region ...`.
+- More than one metastore in the region: the plan fails and asks you to set `metastore_id`.
+
+Upgrading a state from an older version of this template that created `databricks_metastore.metastore`: the `removed { lifecycle { destroy = false } }` block in `metastore.tf` makes Terraform drop the metastore from this state **without deleting it**. The plan shows it as "will no longer be managed by Terraform". With `metastore_id = ""` the workspace stays assigned to the same metastore (it is the one in the region). Remove `metastore_name` from your `terraform.tfvars`; it is no longer a variable.
+
 ## Existing metastore prerequisites
 
-Skip this section if you let the template create the metastore: the identity running Terraform then owns it and can create everything it needs.
-
-When you attach to an **existing** metastore, the identity running Terraform (typically the service principal) is usually not a metastore admin, so it cannot create the storage credential, external location and catalog. Before deploying, have a **metastore admin** run this SQL in a workspace attached to that metastore (a SQL warehouse or notebook), replacing the principal with the identity's application (client) ID:
+The identity running Terraform (typically the service principal) is usually not a metastore admin, so it cannot create the storage credential, external location and catalog. Before deploying, have a **metastore admin** run this SQL in a workspace attached to that metastore (a SQL warehouse or notebook), replacing the principal with the identity's application (client) ID:
 
 ```sql
 GRANT CREATE STORAGE CREDENTIAL ON METASTORE TO `<application-id>`;
@@ -127,7 +156,7 @@ The code provisions:
 5. **Cross-account IAM role** -- An IAM role that grants Databricks access to your AWS account for workspace provisioning. Its inline policy is the `customer` or `restricted` variant, chosen with `cross_account_policy_type`.
 6. **Root S3 bucket** -- An S3 bucket for workspace root storage (DBFS), with a Databricks-specific bucket policy.
 7. **Databricks workspace** -- An E2 workspace using the provisioned network, credentials, and storage configuration.
-8. **Unity Catalog metastore** -- Either creates a new metastore (when `metastore_id` is empty) or uses an existing one. The metastore is assigned to the workspace.
+8. **Unity Catalog metastore assignment** -- Assigns the workspace to the existing metastore in the region: the one in `metastore_id`, or the auto-discovered one when `metastore_id` is empty. No metastore is created.
 9. **Unity Catalog IAM role and S3 bucket** _(optional, when `new_catalog = true`)_ -- A dedicated IAM role and S3 bucket for the Unity Catalog external location, with appropriate trust and access policies.
 10. **Storage credential and external location** _(optional, when `new_catalog = true`)_ -- A Unity Catalog storage credential backed by the IAM role, and an external location pointing to the catalog S3 bucket.
 11. **User-defined catalog** _(optional, when `new_catalog = true`)_ -- A Unity Catalog catalog backed by the external location's storage. When `workspace_admin_email` is set, that user is also made workspace admin and granted `ALL PRIVILEGES` on the catalog, external location and storage credential.
@@ -159,8 +188,7 @@ Copy `terraform.tfvars.example` to `terraform.tfvars` in the `tf/` directory and
 | `new_security_group_name` | **(Optional)** Name for the new security group. If empty, defaults to `{resource_prefix}-databricks-sg`. Default: `""`. |
 | `sg_egress_ports` | **(Optional)** List of egress ports to allow in security group rules. Default: `[443, 3306, 2443, 5432, 8443, 8444, 8445, 8446, 8447, 8448, 8449, 8450, 8451]`. |
 | `aws_account_id` | **(Required)** AWS account ID where resources are deployed (used to construct IAM role ARNs for Unity Catalog). With `cross_account_policy_type = "restricted"` it must match the account of the AWS credentials. |
-| `metastore_id` | **(Optional)** Existing Unity Catalog metastore ID. Leave empty to create a new one. Default: `""`. |
-| `metastore_name` | **(Optional)** Name for the Unity Catalog metastore. Required when `metastore_id` is empty. Default: `""`. |
+| `metastore_id` | **(Optional)** ID of the existing Unity Catalog metastore to assign (must be in `region`). Leave empty to auto-discover the account's metastore in `region`; the plan fails if there is none. The template never creates a metastore. Default: `""`. |
 | `workspace_admin_email` | **(Optional)** Email of a Databricks account user to make workspace admin and grant `ALL PRIVILEGES` on the user-defined catalog, external location and storage credential. Without it the Terraform principal owns them and nobody else can see them until granted access. Default: `""` (skipped). |
 | `new_catalog` | **(Optional)** Whether to create a user-defined catalog (storage credential, IAM role, S3 bucket, external location, and catalog). Default: `true`. |
 | `catalog_name` | **(Optional)** Unity Catalog catalog name. Default `""` uses `{prefix}-catalog`. |
@@ -189,7 +217,11 @@ Occasionally, you'll be asked to confirm certain actions; type yes when prompted
 
 ### Walkthrough: restricted policy, new /18 BYOVPC, no PrivateLink (ap-southeast-1)
 
-1. Copy the example and edit it:
+1. Make sure a Unity Catalog metastore **already exists in ap-southeast-1** for the Databricks account. There is one metastore per region per account, created by an account admin in the account console (**Catalog > Create metastore**, region `ap-southeast-1`). This template does not create it. To find its ID, open **Account console > Catalog** and click the ap-southeast-1 metastore, or run `databricks account metastores list` and pick the row with region `ap-southeast-1`. You can also leave `metastore_id` empty and the template auto-discovers it; if there is none, `terraform plan` fails and tells you to create it.
+
+   If the service principal running Terraform is not a metastore admin, have a metastore admin run the grants in [Existing metastore prerequisites](#existing-metastore-prerequisites) first (needed for `new_catalog = true`).
+
+2. Copy the example and edit it:
 
    ```bash
    cd tf/
@@ -213,22 +245,21 @@ Occasionally, you'll be asked to confirm certain actions; type yes when prompted
    public_subnets_cidr  = ["10.10.32.0/26", "10.10.32.64/26"]
    security_group_ids   = []
 
-   metastore_id   = ""  # or the ID of the existing ap-southeast-1 metastore
-   metastore_name = "<metastore-name>"
+   metastore_id          = ""  # auto-discover the ap-southeast-1 metastore, or set its ID
    workspace_admin_email = "<you@company.com>"
    ```
 
    To use an existing /18 VPC instead, set `vpc_id`, `subnet_ids` (at least 2 private subnets in different AZs) and either one `security_group_ids` entry or none.
 
-2. Authenticate to AWS and Databricks (see [Authenticate](#authenticate)), then run:
+3. Authenticate to AWS and Databricks (see [Authenticate](#authenticate)), then run:
 
    ```bash
    terraform init
-   terraform plan    # check aws_iam_role_policy.this: its policy is "known after apply" when the VPC/SG is new
+   terraform plan    # fails here if there is no ap-southeast-1 metastore; check aws_iam_role_policy.this: its policy is "known after apply" when the VPC/SG is new
    terraform apply
    ```
 
-3. Check the policy that was attached:
+4. Check the policy that was attached:
 
    ```bash
    aws iam get-role-policy \
@@ -238,10 +269,10 @@ Occasionally, you'll be asked to confirm certain actions; type yes when prompted
 
    The resources should reference `arn:aws:ec2:ap-southeast-1:<aws-account-id>:...`, the `ec2:vpc` condition should name `terraform output -raw vpc_id`, and the security group statement should name the ID from `terraform output security_group_ids`.
 
-4. Validate compute with a **DBSQL Pro warehouse**. Pro warehouses run as classic compute in your VPC, so this tests the restricted cross-account policy, the subnets, NAT egress and the security group. (Serverless warehouses run in the Databricks account and would not test them.)
+5. Validate compute with a **DBSQL Pro warehouse**. Pro warehouses run as classic compute in your VPC, so this tests the restricted cross-account policy, the subnets, NAT egress and the security group. (Serverless warehouses run in the Databricks account and would not test them.)
    - Open the workspace (`terraform output -raw workspace_url`), go to **SQL Warehouses → Create SQL warehouse**, set **Type = Pro**, the smallest cluster size, and a short auto-stop.
    - Wait until the warehouse is **Running**. Then, in the SQL editor, run `SELECT current_metastore(), current_catalog();` and, if `new_catalog = true`, `SHOW SCHEMAS IN <catalog_name>;`.
-   - If it stays in *Starting* and fails with an EC2 authorization error (for example `UnauthorizedOperation` on `ec2:RunInstances`), the restricted policy does not match the VPC/SG the workspace uses. Re-run `terraform apply` and check step 3.
+   - If it stays in *Starting* and fails with an EC2 authorization error (for example `UnauthorizedOperation` on `ec2:RunInstances`), the restricted policy does not match the VPC/SG the workspace uses. Re-run `terraform apply` and check step 4.
    - Stop or delete the warehouse afterwards to avoid charges.
 
 ## Access Your Workspace
@@ -275,6 +306,8 @@ cd tf
 terraform destroy
 ```
 
+This removes the workspace's metastore assignment but never the metastore itself (it is not in this state), so other workspaces in the region are not affected.
+
 Type `yes` when prompted. Destruction can take several minutes.
 
 ## Troubleshooting
@@ -290,6 +323,9 @@ Type `yes` when prompted. Destruction can take several minutes.
 | Plan fails: `cross_account_policy_type = "restricted" scopes the policy to a single security group` | More than one ID in `security_group_ids` | Use a single workspace security group, or switch to `customer`. |
 | Plan fails: `aws_account_id does not match the AWS account of the current AWS credentials` | `aws_account_id` and the AWS credentials point to different accounts | Fix `aws_account_id` or switch AWS credentials. |
 | Clusters / Pro warehouses fail with EC2 `UnauthorizedOperation` (restricted policy) | The workspace network configuration uses a VPC/SG the policy is not scoped to | Re-apply so the policy follows the current `vpc_id` / security group, then check the policy with `aws iam get-role-policy`. |
+| Plan fails: `No Unity Catalog metastore found in region ...` | The account has no metastore in `region` (the template does not create one) | Have an account admin create one in the account console (Catalog > Create metastore) or a separate Terraform stack, then plan again. |
+| Plan fails: `Metastore <id> is not in the workspace region` | `metastore_id` points to a metastore in another region | Use the ID of the metastore in `region` (`databricks account metastores list`), or leave `metastore_id` empty. |
+| Plan fails: `duplicate metastore name detected` | Auto-discovery lists metastores by name and two metastores in the account share a name | Set `metastore_id` explicitly. |
 | Cluster create fails on `node_type_id` validation | The workspace restricts allowed instance types | Set `node_type_id` (in `cluster.tf`) to an allowed type, or adjust the allowed instance types in the account console. |
 
 ## File Structure
@@ -308,7 +344,7 @@ tf/
 ├── security_group.tf           # Security group rules
 ├── credential.tf               # IAM cross-account role and policies
 ├── root_s3_bucket.tf           # S3 bucket for workspace root storage
-├── metastore.tf                # Unity Catalog metastore
+├── metastore.tf                # Assignment to the existing Unity Catalog metastore
 ├── unity_catalog.tf            # Storage credential, external location, and user-defined catalog
 ├── cluster.tf                  # Optional UC-compatible single-node cluster
 ```
@@ -324,10 +360,10 @@ tf/
 | **security_group.tf** | Default security group egress rules for Databricks-required ports, internal TCP/UDP egress, and self-ingress. |
 | **credential.tf** | Cross-account IAM role and its `customer` or `restricted` policy (`cross_account_policy_type`) for Databricks workspace provisioning. |
 | **root_s3_bucket.tf** | S3 bucket for workspace root storage (DBFS) with Databricks bucket policy. |
-| **metastore.tf** | Unity Catalog metastore (create new or use existing), region check for existing metastores, and workspace assignment. |
+| **metastore.tf** | Finds the existing Unity Catalog metastore (`metastore_id` or auto-discovery by region), plan-time region/existence checks, workspace assignment, and a `removed` block so states from older versions forget (not destroy) a metastore they created. |
 | **unity_catalog.tf** | Optional Unity Catalog IAM role, S3 bucket, storage credential, external location, and user-defined catalog (gated by `new_catalog`). |
 | **cluster.tf** | Optional UC-compatible single-node cluster (gated by `new_cluster`). |
-| **outputs.tf** | Workspace URL/ID; VPC ID; subnet IDs; NAT gateway IDs; security group ID; S3 bucket names; metastore ID; Unity Catalog catalog, external location, and storage credential names; cluster name; credentials and network config IDs. |
+| **outputs.tf** | Workspace URL/ID; VPC ID; subnet IDs; NAT gateway IDs; security group ID; S3 bucket names; metastore ID and name; Unity Catalog catalog, external location, and storage credential names; cluster name; credentials and network config IDs. |
 
 **Note:** There is no `main.tf` file in this project. Instead, resources are organized into descriptive, purpose-specific files.
 

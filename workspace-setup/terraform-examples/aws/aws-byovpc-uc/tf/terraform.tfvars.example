@@ -81,11 +81,16 @@ sg_egress_ports = [443, 3306, 2443, 5432, 8443, 8444, 8445, 8446, 8447, 8448, 84
 # Unity Catalog Metastore Configuration
 # =============================================================================
 
-# Option 1: Create new metastore (leave metastore_id empty and specify name)
-metastore_id   = ""
-metastore_name = "my-unity-catalog-metastore"
+# This template does NOT create a metastore. A metastore must already exist in `region`
+# (one per region per account; an account admin creates it in the account console under
+# Catalog, or in a separate Terraform stack). The workspace is assigned to it.
+#
+# Option 1 (default): leave empty to auto-discover the account's metastore in `region`.
+#   The plan fails with a clear error if there is none.
+metastore_id = ""
 
-# Option 2: Use existing metastore (uncomment and specify ID)
+# Option 2: pin the metastore explicitly. Find the ID in Account console > Catalog, or with
+# `databricks account metastores list`. It must be in `region`.
 # metastore_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 
 # =============================================================================

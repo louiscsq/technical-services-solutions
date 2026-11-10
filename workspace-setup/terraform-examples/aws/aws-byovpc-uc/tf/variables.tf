@@ -155,20 +155,11 @@ variable "aws_account_id" {
 }
 
 variable "metastore_id" {
-  description = "Existing Unity Catalog metastore ID. If empty, a new metastore will be created"
+  description = "ID of the existing Unity Catalog metastore to assign the workspace to (must be in var.region). If empty, the account's metastore in var.region is auto-discovered; the plan fails if there is none. This template never creates a metastore."
   type        = string
   default     = ""
 }
 
-variable "metastore_name" {
-  description = "Name for the Unity Catalog metastore. Required only when metastore_id is empty (new metastore)."
-  type        = string
-  default     = ""
-  validation {
-    condition     = var.metastore_id != "" || var.metastore_name != ""
-    error_message = "metastore_name is required when creating a new metastore (metastore_id is empty)."
-  }
-}
 # =============================================================================
 # User Defined Catalog
 # =============================================================================

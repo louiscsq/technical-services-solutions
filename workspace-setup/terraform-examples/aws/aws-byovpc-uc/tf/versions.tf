@@ -1,5 +1,5 @@
 terraform {
-  required_version = "~> 1.3"
+  required_version = "~> 1.7" # removed {} block in metastore.tf
 
   required_providers {
     databricks = {
